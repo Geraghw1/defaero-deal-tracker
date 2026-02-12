@@ -1,5 +1,0 @@
-# Local run config
-HOST=127.0.0.1
-PORT=3000
-APP_USERS=bill:Q9#tL2@vM8!xR4,partner:N7$kP5!zW3@hT9
-SESSION_SECRET=J4!mR8#qV2$yP6@kL9%tB3^nD7&cF5
