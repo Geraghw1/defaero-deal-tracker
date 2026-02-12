@@ -129,6 +129,7 @@ function sanitizeOpportunity(payload = {}) {
     confidence: Math.max(0, Math.min(100, parseInt(payload.confidence || 50, 10) || 50)),
     owner: (payload.owner || '').toString().trim(),
     notes: (payload.notes || '').toString().trim(),
+    euc_text: (payload.euc_text || payload.euc || '').toString().trim(),
     next_action: (payload.next_action || '').toString().trim(),
     updated_at: new Date().toISOString()
   };
@@ -189,6 +190,7 @@ async function initDb() {
       confidence INTEGER NOT NULL DEFAULT 50,
       owner TEXT,
       notes TEXT,
+      euc_text TEXT,
       next_action TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -200,6 +202,7 @@ async function initDb() {
   await ensureColumn('country_of_origin', 'TEXT');
   await ensureColumn('intermediary', 'TEXT');
   await ensureColumn('deal_contacts', 'TEXT');
+  await ensureColumn('euc_text', 'TEXT');
 }
 
 app.post('/api/auth/login', (req, res) => {
@@ -233,9 +236,9 @@ app.get('/api/opportunities', requireAuth, async (req, res) => {
     const params = [];
 
     if (q) {
-      filters.push('(supplier LIKE ? OR product LIKE ? OR customer LIKE ? OR notes LIKE ? OR next_action LIKE ? OR deal_contacts LIKE ?)');
+      filters.push('(supplier LIKE ? OR product LIKE ? OR customer LIKE ? OR notes LIKE ? OR euc_text LIKE ? OR next_action LIKE ? OR deal_contacts LIKE ?)');
       const like = `%${q}%`;
-      params.push(like, like, like, like, like, like);
+      params.push(like, like, like, like, like, like, like);
     }
 
     if (stage && stageValues.includes(stage)) {
@@ -304,8 +307,8 @@ app.post('/api/opportunities', requireAuth, async (req, res) => {
       `INSERT INTO opportunities (
         deal_type, supplier, product, customer, qty_needed, supplier_price, target_sell_price,
         incoterms, country_of_origin, intermediary, deal_contacts,
-        stage, status, confidence, owner, notes, next_action, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        stage, status, confidence, owner, notes, euc_text, next_action, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.deal_type,
         input.supplier,
@@ -323,6 +326,7 @@ app.post('/api/opportunities', requireAuth, async (req, res) => {
         input.confidence,
         input.owner,
         input.notes,
+        input.euc_text,
         input.next_action,
         timestamp,
         timestamp
@@ -374,6 +378,7 @@ app.put('/api/opportunities/:id', requireAuth, async (req, res) => {
         confidence = ?,
         owner = ?,
         notes = ?,
+        euc_text = ?,
         next_action = ?,
         updated_at = ?
       WHERE id = ?`,
@@ -394,6 +399,7 @@ app.put('/api/opportunities/:id', requireAuth, async (req, res) => {
         input.confidence,
         input.owner,
         input.notes,
+        input.euc_text,
         input.next_action,
         input.updated_at,
         id
@@ -463,6 +469,7 @@ app.post('/api/import-xlsx', requireAuth, upload.single('file'), async (req, res
         deal_contacts: contacts,
         owner: req.session.user.username,
         notes: row.Notes || row.notes || '',
+        euc_text: row.EUC || row.euc || '',
         stage: row.Stage || 'sourcing',
         status: row.Status || 'open'
       });
@@ -472,8 +479,8 @@ app.post('/api/import-xlsx', requireAuth, upload.single('file'), async (req, res
         `INSERT INTO opportunities (
           deal_type, supplier, product, customer, qty_needed, supplier_price, target_sell_price,
           incoterms, country_of_origin, intermediary, deal_contacts,
-          stage, status, confidence, owner, notes, next_action, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          stage, status, confidence, owner, notes, euc_text, next_action, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           mapped.deal_type,
           mapped.supplier,
@@ -491,6 +498,7 @@ app.post('/api/import-xlsx', requireAuth, upload.single('file'), async (req, res
           mapped.confidence,
           mapped.owner,
           mapped.notes,
+          mapped.euc_text,
           mapped.next_action,
           now,
           now
