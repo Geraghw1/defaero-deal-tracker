@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: defaero-deal-tracker
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/auth/me
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: APP_USERS
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+    disks:
+      - name: tracker-data
+        mountPath: /opt/render/project/src/data
+        sizeGB: 1

@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DefAero Deal Tracker</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero">
+        <h1>DefAero Sourcing and Deal Tracker</h1>
+        <p>Shared workspace for supplier offers and customer demand.</p>
+        <div id="authState" class="auth-state"></div>
+      </section>
+
+      <section id="loginCard" class="card">
+        <h2>Login</h2>
+        <p class="muted">Only approved users can access the tracker.</p>
+        <form id="loginForm" class="inline-form">
+          <input name="username" placeholder="Username" required />
+          <input name="password" type="password" placeholder="Password" required />
+          <button type="submit">Sign In</button>
+        </form>
+        <p id="loginError" class="error"></p>
+      </section>
+
+      <div id="appContent" hidden>
+        <section class="summary" id="summary"></section>
+
+        <section class="toolbar">
+          <input id="search" type="search" placeholder="Search supplier, product, customer, notes..." />
+          <select id="dealTypeFilter">
+            <option value="">All deal types</option>
+            <option value="supplier_offer">Supplier Offer</option>
+            <option value="customer_need">Customer Need</option>
+            <option value="matched_deal">Matched Deal</option>
+          </select>
+          <select id="stageFilter">
+            <option value="">All stages</option>
+            <option value="sourcing">Sourcing</option>
+            <option value="quoted">Quoted</option>
+            <option value="sampled">Sampled</option>
+            <option value="negotiating">Negotiating</option>
+            <option value="committed">Committed</option>
+            <option value="won">Won</option>
+            <option value="lost">Lost</option>
+          </select>
+          <select id="statusFilter">
+            <option value="">All status</option>
+            <option value="open">Open</option>
+            <option value="won">Won</option>
+            <option value="lost">Lost</option>
+          </select>
+          <input id="ownerFilter" type="text" placeholder="Filter owner" />
+        </section>
+
+        <section class="card">
+          <h2 id="formTitle">Add Opportunity</h2>
+          <form id="opportunityForm">
+            <div class="grid">
+              <label>Deal Type
+                <select name="deal_type">
+                  <option value="supplier_offer">Supplier Offer</option>
+                  <option value="customer_need">Customer Need</option>
+                  <option value="matched_deal">Matched Deal</option>
+                </select>
+              </label>
+              <label>Supplier <input name="supplier" required /></label>
+              <label>Product <input name="product" required /></label>
+              <label>Customer <input name="customer" /></label>
+              <label>Qty Needed <input name="qty_needed" type="number" step="any" /></label>
+              <label>Supplier Price <input name="supplier_price" type="text" /></label>
+              <label>Target Sell Price <input name="target_sell_price" type="text" /></label>
+              <label>Incoterms <input name="incoterms" /></label>
+              <label>Country of Origin <input name="country_of_origin" /></label>
+              <label>Intermediary <input name="intermediary" /></label>
+              <label>Deal Contacts <input name="deal_contacts" placeholder="Who is involved" /></label>
+              <label>Stage
+                <select name="stage">
+                  <option value="sourcing">Sourcing</option>
+                  <option value="quoted">Quoted</option>
+                  <option value="sampled">Sampled</option>
+                  <option value="negotiating">Negotiating</option>
+                  <option value="committed">Committed</option>
+                  <option value="won">Won</option>
+                  <option value="lost">Lost</option>
+                </select>
+              </label>
+              <label>Status
+                <select name="status">
+                  <option value="open">Open</option>
+                  <option value="won">Won</option>
+                  <option value="lost">Lost</option>
+                </select>
+              </label>
+              <label>Confidence % <input name="confidence" type="number" min="0" max="100" value="50" /></label>
+              <label>Owner <input name="owner" placeholder="Defaults to logged-in user" /></label>
+            </div>
+
+            <label>Notes <textarea name="notes" rows="3"></textarea></label>
+            <label>Next Action <textarea name="next_action" rows="2"></textarea></label>
+
+            <div class="actions">
+              <button type="submit" id="submitBtn">Save Opportunity</button>
+              <button type="button" id="cancelEdit" class="ghost" hidden>Cancel Edit</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="card">
+          <h2>Import Existing XLSX</h2>
+          <form id="importForm" class="inline-form">
+            <input type="file" id="xlsxFile" accept=".xlsx" required />
+            <button type="submit">Import</button>
+          </form>
+          <p class="muted">Mapped to your file columns: Product, Supplier, Price (Currency), Incoterms, Country of Origin (COO), Intermediary, Who is involved in the deal, Notes.</p>
+          <p id="importResult" class="muted"></p>
+        </section>
+
+        <section class="card">
+          <h2>Opportunity Board</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>Supplier</th>
+                  <th>Product</th>
+                  <th>Customer</th>
+                  <th>Price</th>
+                  <th>Incoterms</th>
+                  <th>COO</th>
+                  <th>Status</th>
+                  <th>Owner</th>
+                  <th>Updated</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="rows"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
