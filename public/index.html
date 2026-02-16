@@ -123,6 +123,19 @@
         </section>
 
         <section class="card">
+          <h2>Documents</h2>
+          <form id="documentForm" class="inline-form">
+            <select id="docOpportunityId" required>
+              <option value="">Select opportunity</option>
+            </select>
+            <input type="file" id="documentFile" required />
+            <button type="submit">Upload Document</button>
+          </form>
+          <p id="documentResult" class="muted"></p>
+          <div id="documentList" class="doc-list muted">Select an opportunity to view documents.</div>
+        </section>
+
+        <section class="card">
           <h2>Opportunity Board</h2>
           <div class="table-wrap">
             <table>

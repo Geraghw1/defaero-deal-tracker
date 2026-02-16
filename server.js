@@ -16,10 +16,24 @@ const dataDir = path.join(__dirname, 'data');
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
+const uploadsDir = path.join(dataDir, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
 const dbPath = path.join(dataDir, 'tracker.db');
 const db = new sqlite3.Database(dbPath);
 const upload = multer({ storage: multer.memoryStorage() });
+const docsUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, uploadsDir),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || '');
+      cb(null, `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${ext}`);
+    }
+  }),
+  limits: { fileSize: 25 * 1024 * 1024 }
+});
 
 app.use(express.json());
 app.use(
@@ -203,6 +217,18 @@ async function initDb() {
   await ensureColumn('intermediary', 'TEXT');
   await ensureColumn('deal_contacts', 'TEXT');
   await ensureColumn('euc_text', 'TEXT');
+  await run(`
+    CREATE TABLE IF NOT EXISTS opportunity_documents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      opportunity_id INTEGER NOT NULL,
+      original_name TEXT NOT NULL,
+      stored_name TEXT NOT NULL,
+      mime_type TEXT,
+      size_bytes INTEGER,
+      uploaded_by TEXT,
+      created_at TEXT NOT NULL
+    )
+  `);
 }
 
 app.post('/api/auth/login', (req, res) => {
@@ -510,6 +536,125 @@ app.post('/api/import-xlsx', requireAuth, upload.single('file'), async (req, res
     res.json({ imported, rows_read: rows.length, sheet: sheetName });
   } catch (err) {
     res.status(500).json({ error: 'Import failed', detail: err.message });
+  }
+});
+
+app.get('/api/opportunities/:id/documents', requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: 'Invalid opportunity ID' });
+      return;
+    }
+
+    const rows = await all(
+      `SELECT id, opportunity_id, original_name, mime_type, size_bytes, uploaded_by, created_at
+       FROM opportunity_documents
+       WHERE opportunity_id = ?
+       ORDER BY created_at DESC, id DESC`,
+      [id]
+    );
+    res.json({ data: rows });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch documents', detail: err.message });
+  }
+});
+
+app.post('/api/opportunities/:id/documents', requireAuth, docsUpload.single('file'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: 'Invalid opportunity ID' });
+      return;
+    }
+
+    const opportunity = await get('SELECT id FROM opportunities WHERE id = ?', [id]);
+    if (!opportunity) {
+      res.status(404).json({ error: 'Opportunity not found' });
+      return;
+    }
+
+    if (!req.file) {
+      res.status(400).json({ error: 'Upload a document as \"file\"' });
+      return;
+    }
+
+    const createdAt = new Date().toISOString();
+    const result = await run(
+      `INSERT INTO opportunity_documents (
+        opportunity_id, original_name, stored_name, mime_type, size_bytes, uploaded_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        req.file.originalname,
+        req.file.filename,
+        req.file.mimetype,
+        req.file.size,
+        req.session.user.username,
+        createdAt
+      ]
+    );
+
+    const row = await get(
+      `SELECT id, opportunity_id, original_name, mime_type, size_bytes, uploaded_by, created_at
+       FROM opportunity_documents WHERE id = ?`,
+      [result.id]
+    );
+    res.status(201).json(row);
+  } catch (err) {
+    res.status(500).json({ error: 'Document upload failed', detail: err.message });
+  }
+});
+
+app.get('/api/documents/:id/download', requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: 'Invalid document ID' });
+      return;
+    }
+
+    const doc = await get('SELECT * FROM opportunity_documents WHERE id = ?', [id]);
+    if (!doc) {
+      res.status(404).json({ error: 'Document not found' });
+      return;
+    }
+
+    const filePath = path.join(uploadsDir, doc.stored_name);
+    if (!fs.existsSync(filePath)) {
+      res.status(404).json({ error: 'Stored file not found' });
+      return;
+    }
+
+    res.download(filePath, doc.original_name);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to download document', detail: err.message });
+  }
+});
+
+app.delete('/api/documents/:id', requireAuth, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: 'Invalid document ID' });
+      return;
+    }
+
+    const doc = await get('SELECT * FROM opportunity_documents WHERE id = ?', [id]);
+    if (!doc) {
+      res.status(404).json({ error: 'Document not found' });
+      return;
+    }
+
+    await run('DELETE FROM opportunity_documents WHERE id = ?', [id]);
+    const filePath = path.join(uploadsDir, doc.stored_name);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+
+    res.status(204).send();
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete document', detail: err.message });
   }
 });
 

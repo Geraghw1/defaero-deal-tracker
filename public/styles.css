@@ -194,6 +194,19 @@ th {
   min-height: 1.25rem;
 }
 
+.doc-list {
+  margin-top: 10px;
+}
+
+.doc-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--line);
+  padding: 8px 0;
+}
+
 @media (max-width: 900px) {
   .toolbar {
     grid-template-columns: 1fr;

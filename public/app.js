@@ -8,6 +8,11 @@ const rowsEl = document.getElementById('rows');
 const summaryEl = document.getElementById('summary');
 const importForm = document.getElementById('importForm');
 const importResultEl = document.getElementById('importResult');
+const documentForm = document.getElementById('documentForm');
+const documentResultEl = document.getElementById('documentResult');
+const documentListEl = document.getElementById('documentList');
+const docOpportunityIdEl = document.getElementById('docOpportunityId');
+const documentFileEl = document.getElementById('documentFile');
 const formTitle = document.getElementById('formTitle');
 const submitBtn = document.getElementById('submitBtn');
 const cancelEditBtn = document.getElementById('cancelEdit');
@@ -22,6 +27,7 @@ const filters = {
 
 let editingId = null;
 let currentUser = null;
+let opportunitiesCache = [];
 
 function money(value) {
   if (value === null || value === undefined || value === '') return '-';
@@ -35,6 +41,13 @@ function money(value) {
 function formatDate(value) {
   if (!value) return '-';
   return new Date(value).toLocaleString();
+}
+
+function formatBytes(value) {
+  if (!value || value < 1) return '-';
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function serializeForm(formEl) {
@@ -122,7 +135,9 @@ function renderRows(items) {
 async function fetchOpportunities() {
   const res = await apiFetch(`/api/opportunities${toQueryString()}`);
   const payload = await res.json();
-  renderRows(payload.data || []);
+  opportunitiesCache = payload.data || [];
+  renderRows(opportunitiesCache);
+  renderDocumentOpportunityOptions(opportunitiesCache);
 }
 
 function resetForm() {
@@ -135,6 +150,57 @@ function resetForm() {
   cancelEditBtn.hidden = true;
 }
 
+function renderDocumentOpportunityOptions(items) {
+  const previousValue = docOpportunityIdEl.value;
+  docOpportunityIdEl.innerHTML = '<option value="">Select opportunity</option>';
+  items.forEach((item) => {
+    const option = document.createElement('option');
+    option.value = String(item.id);
+    option.textContent = `#${item.id} - ${item.supplier} / ${item.product}`;
+    docOpportunityIdEl.appendChild(option);
+  });
+
+  if (editingId && items.some((item) => Number(item.id) === Number(editingId))) {
+    docOpportunityIdEl.value = String(editingId);
+  } else if (previousValue && items.some((item) => String(item.id) === previousValue)) {
+    docOpportunityIdEl.value = previousValue;
+  }
+
+  if (docOpportunityIdEl.value) {
+    loadDocumentsForOpportunity(docOpportunityIdEl.value);
+  } else {
+    documentListEl.textContent = 'Select an opportunity to view documents.';
+  }
+}
+
+async function loadDocumentsForOpportunity(opportunityId) {
+  if (!opportunityId) {
+    documentListEl.textContent = 'Select an opportunity to view documents.';
+    return;
+  }
+
+  const res = await apiFetch(`/api/opportunities/${opportunityId}/documents`);
+  const body = await res.json();
+  const docs = body.data || [];
+
+  if (!docs.length) {
+    documentListEl.textContent = 'No documents uploaded for this opportunity yet.';
+    return;
+  }
+
+  documentListEl.innerHTML = docs
+    .map(
+      (doc) => `
+      <div class="doc-item">
+        <a href="/api/documents/${doc.id}/download" target="_blank" rel="noopener">${doc.original_name}</a>
+        <span class="muted">${formatBytes(doc.size_bytes)} · ${doc.uploaded_by || '-'} · ${formatDate(doc.created_at)}</span>
+        <button type="button" class="danger" data-doc-delete="${doc.id}">Delete</button>
+      </div>
+    `
+    )
+    .join('');
+}
+
 async function loadOpportunityIntoForm(id) {
   const res = await apiFetch('/api/opportunities');
   const payload = await res.json();
@@ -145,6 +211,8 @@ async function loadOpportunityIntoForm(id) {
   formTitle.textContent = `Edit Opportunity #${item.id}`;
   submitBtn.textContent = 'Update Opportunity';
   cancelEditBtn.hidden = false;
+  docOpportunityIdEl.value = String(item.id);
+  await loadDocumentsForOpportunity(item.id);
 
   Object.keys(item).forEach((key) => {
     if (form.elements[key]) {
@@ -238,6 +306,65 @@ importForm.addEventListener('submit', async (event) => {
   importResultEl.textContent = `Imported ${body.imported} rows from sheet \"${body.sheet}\" (read ${body.rows_read} rows).`;
   fileInput.value = '';
   await refreshData();
+});
+
+documentForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const opportunityId = docOpportunityIdEl.value;
+  const file = documentFileEl.files?.[0];
+
+  if (!opportunityId) {
+    documentResultEl.textContent = 'Choose an opportunity first.';
+    return;
+  }
+  if (!file) {
+    documentResultEl.textContent = 'Choose a file to upload.';
+    return;
+  }
+
+  const payload = new FormData();
+  payload.append('file', file);
+  documentResultEl.textContent = 'Uploading...';
+
+  const res = await apiFetch(`/api/opportunities/${opportunityId}/documents`, {
+    method: 'POST',
+    body: payload
+  });
+
+  let body = {};
+  try {
+    body = await res.json();
+  } catch (_error) {
+    body = {};
+  }
+
+  if (!res.ok) {
+    documentResultEl.textContent = body.error || 'Upload failed.';
+    return;
+  }
+
+  documentResultEl.textContent = `Uploaded ${body.original_name || file.name}`;
+  documentFileEl.value = '';
+  await loadDocumentsForOpportunity(opportunityId);
+});
+
+docOpportunityIdEl.addEventListener('change', async () => {
+  documentResultEl.textContent = '';
+  await loadDocumentsForOpportunity(docOpportunityIdEl.value);
+});
+
+documentListEl.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-doc-delete]');
+  if (!button) return;
+  const docId = button.dataset.docDelete;
+  if (!window.confirm('Delete this document?')) return;
+  const res = await apiFetch(`/api/documents/${docId}`, { method: 'DELETE' });
+  if (!res.ok) {
+    documentResultEl.textContent = 'Delete failed.';
+    return;
+  }
+  documentResultEl.textContent = 'Document deleted.';
+  await loadDocumentsForOpportunity(docOpportunityIdEl.value);
 });
 
 loginForm.addEventListener('submit', async (event) => {
