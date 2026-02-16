@@ -1,37 +1,36 @@
 const path = require('path');
-const fs = require('fs');
 const crypto = require('crypto');
 const express = require('express');
 const session = require('express-session');
-const sqlite3 = require('sqlite3').verbose();
 const multer = require('multer');
 const XLSX = require('xlsx');
+const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
 const isProduction = process.env.NODE_ENV === 'production';
 
-const dataDir = path.join(__dirname, 'data');
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
-const uploadsDir = path.join(dataDir, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
+const databaseUrl = process.env.DATABASE_URL;
+if (!databaseUrl) {
+  // eslint-disable-next-line no-console
+  console.error('Missing DATABASE_URL. Set your Supabase Postgres connection string.');
+  process.exit(1);
 }
 
-const dbPath = path.join(dataDir, 'tracker.db');
-const db = new sqlite3.Database(dbPath);
+const shouldUseSsl =
+  process.env.DATABASE_SSL === 'true' ||
+  process.env.PGSSLMODE === 'require' ||
+  databaseUrl.includes('supabase.co');
+
+const pool = new Pool({
+  connectionString: databaseUrl,
+  ssl: shouldUseSsl ? { rejectUnauthorized: false } : false
+});
+
 const upload = multer({ storage: multer.memoryStorage() });
 const docsUpload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, uploadsDir),
-    filename: (_req, file, cb) => {
-      const ext = path.extname(file.originalname || '');
-      cb(null, `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${ext}`);
-    }
-  }),
+  storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 }
 });
 
@@ -56,40 +55,35 @@ if (isProduction) {
   app.set('trust proxy', 1);
 }
 
-function run(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function onRun(err) {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve({ id: this.lastID, changes: this.changes });
-    });
+function toPgPlaceholders(sql) {
+  let index = 0;
+  return sql.replace(/\?/g, () => {
+    index += 1;
+    return `$${index}`;
   });
 }
 
-function all(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve(rows);
-    });
-  });
+async function query(sql, params = []) {
+  const compiled = toPgPlaceholders(sql);
+  return pool.query(compiled, params);
 }
 
-function get(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve(row);
-    });
-  });
+async function run(sql, params = []) {
+  const result = await query(sql, params);
+  return {
+    id: result.rows?.[0]?.id || null,
+    changes: result.rowCount || 0
+  };
+}
+
+async function all(sql, params = []) {
+  const result = await query(sql, params);
+  return result.rows;
+}
+
+async function get(sql, params = []) {
+  const result = await query(sql, params);
+  return result.rows[0] || null;
 }
 
 const stageValues = ['sourcing', 'quoted', 'sampled', 'negotiating', 'committed', 'won', 'lost'];
@@ -176,25 +170,17 @@ function requireAuth(req, res, next) {
   next();
 }
 
-async function ensureColumn(columnName, definition) {
-  const columns = await all('PRAGMA table_info(opportunities)');
-  const names = new Set(columns.map((column) => column.name));
-  if (!names.has(columnName)) {
-    await run(`ALTER TABLE opportunities ADD COLUMN ${columnName} ${definition}`);
-  }
-}
-
 async function initDb() {
   await run(`
     CREATE TABLE IF NOT EXISTS opportunities (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id BIGSERIAL PRIMARY KEY,
       deal_type TEXT NOT NULL DEFAULT 'supplier_offer',
       supplier TEXT NOT NULL,
       product TEXT NOT NULL,
       customer TEXT DEFAULT '',
-      qty_needed REAL,
-      supplier_price REAL,
-      target_sell_price REAL,
+      qty_needed DOUBLE PRECISION,
+      supplier_price DOUBLE PRECISION,
+      target_sell_price DOUBLE PRECISION,
       incoterms TEXT,
       country_of_origin TEXT,
       intermediary TEXT,
@@ -206,27 +192,25 @@ async function initDb() {
       notes TEXT,
       euc_text TEXT,
       next_action TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
     )
   `);
 
-  await ensureColumn('deal_type', "TEXT NOT NULL DEFAULT 'supplier_offer'");
-  await ensureColumn('incoterms', 'TEXT');
-  await ensureColumn('country_of_origin', 'TEXT');
-  await ensureColumn('intermediary', 'TEXT');
-  await ensureColumn('deal_contacts', 'TEXT');
-  await ensureColumn('euc_text', 'TEXT');
   await run(`
     CREATE TABLE IF NOT EXISTS opportunity_documents (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      opportunity_id INTEGER NOT NULL,
+      id BIGSERIAL PRIMARY KEY,
+      opportunity_id BIGINT NOT NULL,
       original_name TEXT NOT NULL,
-      stored_name TEXT NOT NULL,
       mime_type TEXT,
-      size_bytes INTEGER,
+      size_bytes BIGINT,
+      file_data BYTEA NOT NULL,
       uploaded_by TEXT,
-      created_at TEXT NOT NULL
+      created_at TIMESTAMPTZ NOT NULL,
+      CONSTRAINT fk_opportunity
+        FOREIGN KEY(opportunity_id)
+        REFERENCES opportunities(id)
+        ON DELETE CASCADE
     )
   `);
 }
@@ -262,7 +246,7 @@ app.get('/api/opportunities', requireAuth, async (req, res) => {
     const params = [];
 
     if (q) {
-      filters.push('(supplier LIKE ? OR product LIKE ? OR customer LIKE ? OR notes LIKE ? OR euc_text LIKE ? OR next_action LIKE ? OR deal_contacts LIKE ?)');
+      filters.push('(supplier ILIKE ? OR product ILIKE ? OR customer ILIKE ? OR notes ILIKE ? OR euc_text ILIKE ? OR next_action ILIKE ? OR deal_contacts ILIKE ?)');
       const like = `%${q}%`;
       params.push(like, like, like, like, like, like, like);
     }
@@ -283,7 +267,7 @@ app.get('/api/opportunities', requireAuth, async (req, res) => {
     }
 
     if (owner) {
-      filters.push('owner LIKE ?');
+      filters.push('owner ILIKE ?');
       params.push(`%${owner}%`);
     }
 
@@ -301,13 +285,13 @@ app.get('/api/opportunities', requireAuth, async (req, res) => {
 app.get('/api/summary', requireAuth, async (_req, res) => {
   try {
     const [counts, pipeline] = await Promise.all([
-      all(`SELECT status, COUNT(*) as count FROM opportunities GROUP BY status`),
-      get(`SELECT ROUND(SUM(COALESCE(target_sell_price, 0) * COALESCE(qty_needed, 0)), 2) AS total_pipeline FROM opportunities WHERE status = 'open'`)
+      all('SELECT status, COUNT(*)::int as count FROM opportunities GROUP BY status'),
+      get("SELECT ROUND(SUM(COALESCE(target_sell_price, 0) * COALESCE(qty_needed, 0))::numeric, 2) AS total_pipeline FROM opportunities WHERE status = 'open'")
     ]);
 
-    const summary = { open: 0, won: 0, lost: 0, total_pipeline: pipeline?.total_pipeline || 0 };
+    const summary = { open: 0, won: 0, lost: 0, total_pipeline: Number(pipeline?.total_pipeline || 0) };
     counts.forEach((entry) => {
-      summary[entry.status] = entry.count;
+      summary[entry.status] = Number(entry.count);
     });
 
     res.json(summary);
@@ -334,7 +318,7 @@ app.post('/api/opportunities', requireAuth, async (req, res) => {
         deal_type, supplier, product, customer, qty_needed, supplier_price, target_sell_price,
         incoterms, country_of_origin, intermediary, deal_contacts,
         stage, status, confidence, owner, notes, euc_text, next_action, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       [
         input.deal_type,
         input.supplier,
@@ -487,7 +471,7 @@ app.post('/api/import-xlsx', requireAuth, upload.single('file'), async (req, res
         supplier,
         product,
         customer: row.Customer || row.customer || '',
-        supplier_price: row['Price (Currency)'] || row['Price'] || '',
+        supplier_price: row['Price (Currency)'] || row.Price || '',
         target_sell_price: row['Target Sell Price'] || row.TargetSellPrice || '',
         incoterms: row.Incoterms || row.incoterms || '',
         country_of_origin: row['Country of Origin (COO)'] || row['Country of Origin'] || '',
@@ -575,21 +559,21 @@ app.post('/api/opportunities/:id/documents', requireAuth, docsUpload.single('fil
     }
 
     if (!req.file) {
-      res.status(400).json({ error: 'Upload a document as \"file\"' });
+      res.status(400).json({ error: 'Upload a document as "file"' });
       return;
     }
 
     const createdAt = new Date().toISOString();
     const result = await run(
       `INSERT INTO opportunity_documents (
-        opportunity_id, original_name, stored_name, mime_type, size_bytes, uploaded_by, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        opportunity_id, original_name, mime_type, size_bytes, file_data, uploaded_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`,
       [
         id,
         req.file.originalname,
-        req.file.filename,
         req.file.mimetype,
         req.file.size,
+        req.file.buffer,
         req.session.user.username,
         createdAt
       ]
@@ -614,19 +598,15 @@ app.get('/api/documents/:id/download', requireAuth, async (req, res) => {
       return;
     }
 
-    const doc = await get('SELECT * FROM opportunity_documents WHERE id = ?', [id]);
+    const doc = await get('SELECT original_name, mime_type, file_data FROM opportunity_documents WHERE id = ?', [id]);
     if (!doc) {
       res.status(404).json({ error: 'Document not found' });
       return;
     }
 
-    const filePath = path.join(uploadsDir, doc.stored_name);
-    if (!fs.existsSync(filePath)) {
-      res.status(404).json({ error: 'Stored file not found' });
-      return;
-    }
-
-    res.download(filePath, doc.original_name);
+    res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(doc.original_name)}"`);
+    res.send(doc.file_data);
   } catch (err) {
     res.status(500).json({ error: 'Failed to download document', detail: err.message });
   }
@@ -640,16 +620,10 @@ app.delete('/api/documents/:id', requireAuth, async (req, res) => {
       return;
     }
 
-    const doc = await get('SELECT * FROM opportunity_documents WHERE id = ?', [id]);
-    if (!doc) {
+    const result = await run('DELETE FROM opportunity_documents WHERE id = ?', [id]);
+    if (!result.changes) {
       res.status(404).json({ error: 'Document not found' });
       return;
-    }
-
-    await run('DELETE FROM opportunity_documents WHERE id = ?', [id]);
-    const filePath = path.join(uploadsDir, doc.stored_name);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
     }
 
     res.status(204).send();
